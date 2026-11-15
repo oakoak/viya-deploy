@@ -1,0 +1,8 @@
+# Инструменты для запуска тестов на машине РАЗРАБОТЧИКА (любой современный Python, 3.9+).
+# На сервере не нужны. Порядок установки на dev:
+#   pip install -e deploy                 # сам пакет + рантайм-зависимости (requests/PyYAML/jsonschema)
+#   pip install -r deploy/requirements-dev.txt
+# Затем:  cd deploy && pytest             # юнит-тесты; API-тесты идут только при наличии tests/params.local.env
+
+pytest==9.0.3
+requests-mock==1.12.1

@@ -1,0 +1,72 @@
+$schema: "http://json-schema.org/draft-07/schema#"
+type: object
+required: [version, root_folder_path, modules]
+additionalProperties: false
+properties:
+  version:
+    description: "Версия формата конфига; должна совпадать с FORMAT_VERSION инструмента (проверяется при сборке и деплое)."
+    type: integer
+    minimum: 1
+  root_folder_path:
+    type: string
+    minLength: 1
+  modules:
+    type: array
+    minItems: 1
+    items:
+      type: object
+      required: [folder_name, jobs]
+      additionalProperties: false
+      properties:
+        folder_name:
+          type: string
+          minLength: 1
+        jobs:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [name, code]
+            additionalProperties: false
+            properties:
+              name: {type: string, minLength: 1}
+              description: {type: string}
+              type:
+                description: "По умолчанию 'Compute' (константа), указывать нужно только для нестандартных job'ов."
+                type: string
+                minLength: 1
+              code: {type: string, minLength: 1}
+              parameters:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [name, type]
+                  properties:
+                    name: {type: string, minLength: 1}
+                    type: {type: string, minLength: 1}
+                    defaultValue: {type: string}
+                    label: {type: string}
+                    required: {type: boolean}
+              schedule:
+                oneOf:
+                  - description: "daily - раз в N дней, в конкретное время"
+                    type: object
+                    additionalProperties: false
+                    required: [type, every, at]
+                    properties:
+                      type: {const: daily}
+                      every: {type: integer, minimum: 1}
+                      at:
+                        description: "время запуска, формат HH:MM (24ч)"
+                        type: string
+                        pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+                      timezone: {type: string, minLength: 1}
+                  - description: "minutely/hourly - непрерывно, раз в N минут/часов"
+                    type: object
+                    additionalProperties: false
+                    required: [type, every]
+                    properties:
+                      type: {enum: [minutely, hourly]}
+                      every: {type: integer, minimum: 1}
+                      timezone: {type: string, minLength: 1}

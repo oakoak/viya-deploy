@@ -1,0 +1,605 @@
+version: 2
+root_folder_path: /Environment
+modules:
+- folder_name: WLF
+  jobs:
+  - name: create_wl_excel_huge
+    code: |
+      /*
+      © 2025 GlowByte Consulting
+      File: WLF/create_wl_excel_huge.sas
+      Purpose: Предзагрузка больших списков в эксель на сервер
+      Params:
+
+      Date       Author               Ref           Revision
+      ---------- -------------------- ------------- --------------------------------------------------------------------------
+      04.02.2024 Ракитов Артем        NBU-415       Initial
+      */
+
+      %m_create_wl_excel_huge;
+    parameters:
+    - name: _action
+      type: CHARACTER
+      defaultValue: form,prompts,execute
+      required: false
+  - name: match_clients_x_lists
+    code: |-
+      %m_log_start(stp, SCN, m_aml_lists_load_v2);
+
+      %m_matchcode_load_v3(mvTableName=FSC_ENTITY_WATCH_LIST_DIM,mvInc=,mvCycle=10000);
+      %m_matchcode_load_v3(mvTableName=FSC_PARTY_DIM,mvInc=,mvCycle=10000);
+      %m_matchcode_load_v3(mvTableName=FSC_PARTY_ASSOC,mvInc=,mvCycle=10000);
+
+      %m_matchcode_load_og(mvTableName=FSC_ENTITY_WATCH_LIST_DIM,mvInc=,mvCycle=10000);
+      %m_matchcode_load_og(mvTableName=FSC_PARTY_DIM,mvInc=,mvCycle=10000);
+
+      %m_ewld_ope_new(mvInitialFlag=);
+      %m_create_list_alerts;
+
+
+      %m_log_end;
+    parameters:
+    - name: _action
+      type: CHARACTER
+      defaultValue: execute
+      required: false
+    - name: _output_type
+      type: CHARACTER
+      defaultValue: HTML
+      required: false
+  - name: sp_api_load_ewld
+    code: |
+      /*
+      © 2024 GlowByte Consulting
+      File: WLF/stp/sp_api_load_ewld.sas
+      Purpose: Получение по REST санкционных списков и раскладка их в EWLD
+      Params:
+
+      Date       Author               Ref           Revision
+      ---------- -------------------- ------------- --------------------------------------------------------------------------
+      28.10.2024 Ракитов Артем        NBU-250       Initial
+      */
+
+      %m_nbu_api_load_ewld;
+    parameters:
+    - name: _action
+      type: CHARACTER
+      defaultValue: form,prompts,execute
+      required: false
+    schedule:
+      type: hourly
+      every: 2
+  - name: sp_load_ewld
+    code: |-
+      OPTIONS mprint mprintnest mlogic mlogicnest symbolgen source source2 fullstimer msglevel=I;
+      %m_log_start(stp, WLF, sp_load_ewld);
+      %m_nbu_load_ewld;
+      %m_log_end;
+    parameters:
+    - name: _action
+      type: CHARACTER
+      defaultValue: form,prompts,execute
+      required: false
+    schedule:
+      type: minutely
+      every: 10
+- folder_name: RPT
+  jobs:
+  - name: run_reports
+    code: |-
+      %let _WEBIN_FILEURI=/files/files/&file_id.;
+      %m_run_report;
+    parameters:
+    - name: _action
+      type: CHARACTER
+      defaultValue: execute
+      required: false
+    - name: report_name
+      type: CHARACTER
+      defaultValue: tst
+      required: true
+    - name: _output_type
+      type: CHARACTER
+      defaultValue: none
+      required: false
+    - name: file_id
+      type: CHARACTER
+      required: true
+- folder_name: ONB
+  jobs:
+  - name: sp_api_onb_arb_req
+    code: '%include "%superq(mvgEnvDir)/ONB/stp/sp_api_onb_arb_req.sas";'
+    parameters:
+    - name: _action
+      type: CHARACTER
+      defaultValue: form,prompts,execute
+      required: false
+    - name: requestId
+      type: CHARACTER
+      required: true
+    - name: requestDttm
+      type: CHARACTER
+      required: true
+  - name: sp_get_risks
+    code: |
+      /* 1. Настройка параметров и значений по умолчанию */
+      %let page = %sysfunc(ifc(%symexist(page), &page, 1));
+      %let limit = %sysfunc(ifc(%symexist(limit), &limit, 10));
+      %let sort_by = %sysfunc(ifc(%symexist(sort_by), &sort_by, last_updated_at_dttm));
+      %let sort_order = %sysfunc(ifc(%symexist(sort_order), &sort_order, desc));
+      %let filter_city = %sysfunc(ifc(%symexist(filter_city), &filter_city, %str()));
+
+      %let offset = %eval((&page - 1) * &limit);
+
+      	proc sql noprint;
+      		connect using vi_alert as postgres;
+      create table local_copy as
+          select * from connection to postgres (
+        SELECT * FROM fdhdata.v_fsc_internal_risk_dim_h
+          order by &sort_by. &sort_order.
+          LIMIT &limit. OFFSET &offset.;
+      );
+            disconnect from postgres;
+      quit;
+
+      proc json out=_webout pretty;
+          export local_copy  / nosastags;;
+      run;
+    parameters:
+    - name: _action
+      type: CHARACTER
+      defaultValue: execute
+      required: false
+    - name: _output_type
+      type: CHARACTER
+      defaultValue: HTML
+      required: false
+    - name: page
+      type: NUMERIC
+      required: false
+    - name: limit
+      type: NUMERIC
+      required: false
+    - name: sort_by
+      type: CHARACTER
+      defaultValue: last_updated_at_dttm
+      required: false
+    - name: sort_order
+      type: CHARACTER
+      defaultValue: desc
+      required: false
+  - name: sp_get_risks_score
+    code: |-
+      %macro get_risks_score;
+
+      filename _webout filesrvc parenturi="&SYS_JES_JOB_URI" name="_webout.json"  lrecl=999999 mod; 	
+
+      proc json out=_webout pretty;
+          export SAS_AML.CRITERION_SCORE_LIST / nosastags;
+      run;
+
+      %mend get_risks_score;
+
+      OPTIONS mprint mprintnest mlogic mlogicnest symbolgen source source2 fullstimer msglevel=I; 
+
+      %m_log_start(stp, ONB, get_risks_score);
+      %get_risks_score
+      %m_log_end;
+    parameters:
+    - name: _action
+      type: CHARACTER
+      defaultValue: execute
+      required: false
+    - name: _output_type
+      type: CHARACTER
+      defaultValue: HTML
+      required: false
+  - name: sp_job_onb_arb_req_run
+    code: '%include "%superq(mvgEnvDir)/ONB/stp/sp_job_onb_arb_req_run.sas";'
+    parameters:
+    - name: _action
+      type: CHARACTER
+      defaultValue: form,prompts,execute
+      required: false
+  - name: sp_onb_arb_alert_decision
+    code: '%include "%superq(mvgEnvDir)/ONB/stp/sp_onb_arb_alert_decision.sas";'
+    parameters:
+    - name: _action
+      type: CHARACTER
+      defaultValue: form,prompts,execute
+      required: false
+  - name: sp_main_crit
+    code: |2
+      options mprint mlogic symbolgen;
+      %m_log_start(stp, ONB, m_main_crit_macro);
+
+      %m_main_crit_macro;
+      %m_log_end;
+    parameters:
+    - name: _action
+      type: CHARACTER
+      defaultValue: execute
+      required: false
+    - name: _output_type
+      type: CHARACTER
+      defaultValue: HTML
+      required: false
+  - name: sp_onb_risk_set_man_level
+    code: '%include "%superq(mvgEnvDir)/ONB/stp/sp_onb_risk_set_man_level.sas";'
+    parameters:
+    - name: _action
+      type: CHARACTER
+      defaultValue: form,prompts,execute
+      required: false
+- folder_name: VI
+  jobs:
+  - name: create_rep_on_match
+    code: |+
+      /*
+      © 2025 GlowByte Consulting
+      File: VI/create_rep_on_match.sas
+      Purpose: Выгрузка отчетов по совпадениям данных
+      Params:
+
+      Date       Author               Ref           Revision
+      ---------- -------------------- ------------- --------------------------------------------------------------------------
+      03.03.2024 Петров Олег
+      */
+
+      %m_log_start(stp, VI, create_rep_on_match);
+
+      %m_create_rep_on_match(&reportType.,&limit.);
+
+      %m_log_end;
+
+    parameters:
+    - name: _action
+      type: CHARACTER
+      defaultValue: execute
+      required: false
+    - name: _output_type
+      type: CHARACTER
+      defaultValue: HTML
+      required: false
+    - name: reportType
+      type: CHARACTER
+      required: true
+    - name: limit
+      type: CHARACTER
+      required: true
+  - name: get_alerting_event_cnt
+    code: |-
+      %macro get_alerting_event_cnt;
+      %let cnt_alerts=;
+
+      	proc sql noprint;
+      		connect using vi_alert as postgres;
+      select cnt into:cnt_alerts trimmed from connection to postgres (
+
+
+      		SELECT count(1) as cnt
+      			from svi_alerts.tdc_alerting_event tsfe 
+      			where rec_queue_id = 'nbu_list'
+      %if ("%superQ(alert_type)" ne "") %then %do;
+                  %str(and enrichment_json_doc ->> %'alert_type%') = %str(%')&alert_type.%str(%')
+              %end;
+
+      );
+            disconnect from postgres;
+      	quit;
+
+      filename _webout filesrvc parenturi="&SYS_JES_JOB_URI" name="_webout.txt"  lrecl=999999 mod; 	
+
+
+      data _null_;
+          file _webout; 
+
+          put "&cnt_alerts.";
+
+      run;
+
+      %mend get_alerting_event_cnt;
+
+      OPTIONS mprint mprintnest mlogic mlogicnest symbolgen source source2 fullstimer msglevel=I; 
+
+      %m_log_start(stp, VI, get_alerting_event_cnt);
+      %get_alerting_event_cnt
+      %m_log_end;
+    parameters:
+    - name: _action
+      type: CHARACTER
+      defaultValue: execute
+      required: false
+    - name: _output_type
+      type: CHARACTER
+      defaultValue: HTML
+      required: false
+    - name: alert_type
+      type: CHARACTER
+      required: false
+  - name: get_wl_excel
+    code: |+
+      /*
+      © 2025 GlowByte Consulting
+      File: VI/get_wl_excel.sas
+      Purpose: Выгрузка списков в эксель в VI
+      Params:
+
+      Date       Author               Ref           Revision
+      ---------- -------------------- ------------- --------------------------------------------------------------------------
+      04.02.2024 Ракитов Артем        NBU-415       Initial
+      */
+
+      %m_get_wl_excel;
+
+    parameters:
+    - name: _action
+      type: CHARACTER
+      defaultValue: execute
+      required: false
+    - name: entity_watch_list_name
+      type: CHARACTER
+      required: true
+    - name: _output_type
+      type: CHARACTER
+      defaultValue: HTML
+      required: false
+  - name: increment_index_reglament
+    code: |-
+      OPTIONS mprint mprintnest mlogic mlogicnest symbolgen source source2 fullstimer msglevel=I;
+      %m_log_start(stp, VI, inrement_index);
+      	filename myout pipe "&mvgSasRoot./env/VI/scripts/vi_reindex.sh -i incremental -t Specific -o new_nbu_Risk,alerting_event_x_devision,NBU_watch_list,NBU_EWLD_Watch_List_Name";
+      %m_log_end;
+    parameters:
+    - name: _action
+      type: CHARACTER
+      defaultValue: form,prompts,execute
+      required: false
+  - name: indexer_cleaner
+    code: |-
+      DATA _NULL_;
+      	CALL SYSTEM('&mvgSasRoot./env/VI/scripts/svi_indexer_cleaner.sh');
+      RUN;
+    parameters:
+    - name: _action
+      type: CHARACTER
+      defaultValue: form,prompts,execute
+      required: false
+  - name: update_result_list_alert
+    code: |-
+      	proc sql ;
+      		connect using vi_alert as postgres;
+      execute by postgres (
+      DROP TABLE IF EXISTS svi_alerts.tmp_result_alert_lists;
+      create table svi_alerts.tmp_result_alert_lists as (
+      select 
+      	scenario_fired_entity_id,
+      	result_resolution_cd,
+      	result_dttm,
+      	case 
+      		when result_dttm = current_productive_dttm then current_productive_user_id
+      		else lstupdt_user_id
+      	end result_user_id
+      from (
+      select 
+      	tae.alerting_event_sk,
+      	tae.alerting_event_id,
+      	tae.actionable_entity_id,
+      	tae.alert_id,
+      	tae.alert_version_nbr_val,
+      	close_action.disposition_resolution_cd,
+      	close_action.action_dttm,
+      	close_action.lstupdt_user_id,
+      	tsfe.current_disp_resolution_cd,
+      	tsfe.scenario_fired_entity_id,
+      	tsfe.current_productive_dttm,
+      	tsfe.current_productive_user_id,
+      	case 
+      		when disposition_resolution_cd = 'PRODUCTIVE' then coalesce(current_disp_resolution_cd, disposition_resolution_cd) 
+      		when disposition_resolution_cd = 'NON_PRODUCTIVE' then 'NON_PRODUCTIVE'
+      	end result_resolution_cd,
+      	case 
+      		when disposition_resolution_cd = 'PRODUCTIVE' then greatest(action_dttm, current_productive_dttm)
+      		when disposition_resolution_cd = 'NON_PRODUCTIVE' then action_dttm
+      	end result_dttm
+      from svi_alerts.tdc_alerting_event tae 
+      join (
+      select alert_id, alert_version_nbr_val, disposition_resolution_cd, lstupdt_user_id,  action_dttm from (
+      select alert_id, alert_version_nbr_val, disposition_resolution_cd ,lstupdt_user_id,  action_dttm, row_number() over (partition by alert_id, alert_version_nbr_val order by action_dttm desc ) as rn from svi_alerts.tdc_alert_action taa 
+      where taa.action_type_cd = 'DISPOSITION_INVOKED'
+      ) a
+      where rn = 1
+      ) close_action on  tae.alert_id = close_action.alert_id and tae.alert_version_nbr_val = close_action.alert_version_nbr_val
+      join svi_alerts.tdc_scenario_fired_event tsfe on tsfe.alerting_event_id = tae.alerting_event_id
+      where tae.domain_id = 'nbu_list_domain'
+      ) a
+      )
+      );
+            disconnect from postgres;
+      	quit;
+
+      	proc sql ;
+      DROP TABLE sas_aml.tmp_result_alert_lists;
+      create table sas_aml.tmp_result_alert_lists as select * from vi_alert.tmp_result_alert_lists;
+      	quit;
+
+
+
+      	proc sql;
+      	   connect using sas_aml as oracle;
+
+      		execute by oracle (
+      MERGE INTO amlprep.OFFLINE_PARTY_EWLD_V5 t
+      USING sas_aml.tmp_result_alert_lists s
+        ON (t.OFFLINE_PARTY_EWLD_KEY = s.scenario_fired_entity_id)
+      WHEN MATCHED THEN
+        UPDATE SET
+          t.result_resolution_cd = s.result_resolution_cd,
+          t.result_dttm = s.result_dttm,
+          t.result_user_id = s.result_user_id,
+          t.PROCESSED_DTTM = sysdate
+      );
+      	   disconnect from oracle;
+      	quit;
+    parameters:
+    - name: _action
+      type: CHARACTER
+      defaultValue: form,prompts,execute
+      required: false
+  - name: upload_client_list
+    code: |
+      /*
+      © 2025 GlowByte Consulting
+      File: VI/upload_client_list.sas
+      Purpose: Сверка нескольких клиентов со списками 
+      Params:
+
+      Date       Author               Ref           Revision
+      ---------- -------------------- ------------- --------------------------------------------------------------------------
+      03.03.2025 Ракитов Артем        NBU-253       Initial
+      */
+      %m_upload_client_list;
+    parameters:
+    - name: _action
+      type: CHARACTER
+      defaultValue: form,prompts,execute
+      required: false
+    - name: _output_type
+      type: CHARACTER
+      defaultValue: HTML
+      required: false
+  - name: upload_client_report
+    code: |2-
+      OPTIONS mprint mprintnest mlogic mlogicnest symbolgen source source2 fullstimer msglevel=I; 
+
+      %m_log_start(stp, VI, m_upload_client_report);
+      %m_upload_client_report;
+      %m_log_end;
+    parameters:
+    - name: party_number
+      type: CHARACTER
+      required: true
+    - name: account_number
+      type: CHARACTER
+      required: true
+    - name: start_dt
+      type: DATE
+      required: true
+    - name: _action
+      type: CHARACTER
+      defaultValue: execute
+      required: false
+    - name: _output_type
+      type: CHARACTER
+      defaultValue: HTML
+      required: false
+    - name: end_dt
+      type: DATE
+      required: true
+  - name: vi_alert_disposition
+    code: |-
+      OPTIONS mprint mprintnest mlogic mlogicnest symbolgen source source2 fullstimer msglevel=I;
+      %m_log_start(stp, VI, alert_disposition);
+
+      * Reference the uploaded JSON data;
+      filename indata filesrvc "&_WEBIN_FILEURI";
+      * Use the JSON engine to provide read-only sequential access to JSON data;
+      libname indata json;
+      title 'ALLDATA Table from JSON Input';
+      proc print data=indata.alldata; run; quit;
+      title 'ROOT Table from JSON Input';
+      proc print data=indata.root; run; quit;
+
+      data _null_;
+       rc=jsonpp('indata','log');
+      run;
+
+      %m_log_end;
+    parameters:
+    - name: _action
+      type: CHARACTER
+      defaultValue: form,prompts,execute
+      required: false
+  - name: vi_alert_disposition_ewld_list_whl
+    code: |2-
+
+      %m_log_start(stp, VI, vi_alert_disposition_ewld_list_whl);
+
+      * Reference the uploaded JSON data;
+      filename indata filesrvc "&_WEBIN_FILEURI";
+
+      data _null_;
+       rc=jsonpp('indata','log');
+      run;
+
+
+          %let expire_date=;
+
+      	data _null_; 
+      		infile indata truncover scanover; 
+      		input 
+      			@'"actionableEntityId":"' id $255.;
+      		id = substr(id,1,index(id,'",')-1); 
+      	  	call symputx("partyNumber", id);
+      	run;  
+
+      	data _null_; 
+      		infile indata truncover scanover; 
+      		input 			@'"modifiedBy":"' userId $255. ;
+      		userId =  substr(userId,1,index(userId,'",')-1); 
+      	  	call symputx("userId", userId);
+      	run; 
+
+
+      	data _null_; 
+      		infile indata truncover scanover; 
+      		input 			@'"expire_date":"' expire_date $255. ;
+      		userId =  substr(expire_date,1,index(expire_date,'",')-1); 
+      	  	call symputx("expire_date", userId);
+      	run;  
+
+
+      	%put &partyNumber.;
+      	%put &userId.;
+
+      %put &expire_date.;
+
+
+      	%if ("%superQ(expire_date)" ne "") %then %do;
+      		%m_upd_ewld_whl(mvPartyNumber=&partyNumber.,mvScenId=Сверка клиентов с списками,mvExpDate=&expire_date.);
+      	%end;
+
+      %m_log_end;
+    parameters:
+    - name: _action
+      type: CHARACTER
+      defaultValue: form,prompts,execute
+      required: false
+- folder_name: SCN
+  jobs:
+  - name: m_scen_manual_run
+    code: |-
+      %m_log_start(stp, SCN, m_scen_manual_run);
+        filename indata filesrvc "/files/files/&file_id.";
+
+        %if ("%superQ(skip_load)" eq "Y") %then %do;
+          %m_scen_manual_run(mvJsonFileRef=indata);
+        %end;
+        %else %do;
+          %m_scen_manual_run(mvJsonFileRef=indata, mvFTIv3=1,mvTrnActiveFlg=1,mvClrOldTrn=2,mvCasLoad=1);
+        %end;
+
+
+      %m_log_end;
+    parameters:
+    - name: _action
+      type: CHARACTER
+      defaultValue: execute
+      required: false
+    - name: file_id
+      type: CHARACTER
+      required: true
+    - name: skip_load
+      type: CHARACTER
+      required: false
+

@@ -1,0 +1,6 @@
+
+/.secondstack
+
+
+# Local private business context (does not untrack existing files)
+/.business/

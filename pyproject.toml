@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "amldeploy"
+version = "0.1.1"
+description = "Единый инструмент сборки и разворачивания SAS AML custom_config (env/jobs) + деплой job'ов/расписаний в SAS Viya 3.5"
+requires-python = ">=3.8"
+# Точные пины рантайма — в requirements.txt (устанавливаются на сервере офлайн из wheels/).
+# Здесь только имена: пакет должен ставиться и на dev (3.9+), и на сервере (3.8).
+dependencies = [
+    "requests",
+    "PyYAML",
+    "jsonschema",
+]
+
+[project.scripts]
+aml-deploy = "amldeploy.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+markers = [
+    "api: интеграционные тесты против реального SAS Viya (нужен deploy/tests/params.local.env; авто-skip без него)",
+]
+filterwarnings = [
+    "ignore::urllib3.exceptions.InsecureRequestWarning",
+]

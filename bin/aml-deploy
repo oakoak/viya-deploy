@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Лаунчер aml-deploy — единая точка входа для СБОРКИ и ДЕПЛОЯ одним и тем же кодом.
+# Одна FORMAT_VERSION внутри пакета => собранное этим инструментом гарантированно совместимо
+# с деплоем этим же инструментом (см. src/amldeploy/version.py).
+#
+# Что откуда берётся (переменные окружения НЕ требуются):
+#   * TOOL_DIR (venv + src)     — выводится из расположения самого лаунчера (bin/ -> корень тула);
+#   * CUSTOM_CONFIG_ROOT        — из bin/aml-deploy.config, который пишет bootstrap.sh при установке
+#                                 (его аргумент). Это корень custom_config на сервере: aml-deploy.env,
+#                                 build/, симлинк current.
+# Если config-файла нет (dev-checkout без bootstrap) — запускаемся без --custom-config-root,
+# тогда корнём служит текущий каталог (достаточно для `build`).
+set -euo pipefail
+
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)/$(basename "${BASH_SOURCE[0]}")"
+if command -v realpath >/dev/null 2>&1; then SELF="$(realpath "$SELF")"; fi
+BIN_DIR="$(dirname "$SELF")"
+TOOL_DIR="$(dirname "$BIN_DIR")"
+
+CONFIG_FILE="$BIN_DIR/aml-deploy.config"
+CUSTOM_CONFIG_ROOT=""
+# shellcheck disable=SC1090
+[ -f "$CONFIG_FILE" ] && . "$CONFIG_FILE"
+
+VENV_PY="$TOOL_DIR/venv/bin/python"
+if [ ! -x "$VENV_PY" ]; then
+  echo "aml-deploy: venv не найден ($VENV_PY)." >&2
+  echo "            Запустите один раз: $BIN_DIR/bootstrap.sh <custom_config_root>" >&2
+  exit 1
+fi
+
+export PYTHONPATH="$TOOL_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
+
+if [ -n "${CUSTOM_CONFIG_ROOT:-}" ]; then
+  exec "$VENV_PY" -m amldeploy --custom-config-root "$CUSTOM_CONFIG_ROOT" "$@"
+else
+  exec "$VENV_PY" -m amldeploy "$@"
+fi
